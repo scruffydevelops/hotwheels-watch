@@ -20,7 +20,17 @@ const el = {
   themeToggleBtn: document.getElementById("theme-toggle-btn"),
   ntfyLink: document.getElementById("ntfy-link"),
   notifyTestBtn: document.getElementById("notify-test-btn"),
+  authScreen: document.getElementById("auth-screen"),
+  appRoot: document.getElementById("app"),
+  authTabLogin: document.getElementById("auth-tab-login"),
+  authTabSignup: document.getElementById("auth-tab-signup"),
+  authForm: document.getElementById("auth-form"),
+  authSubmitBtn: document.getElementById("auth-submit-btn"),
+  authFormError: document.getElementById("auth-form-error"),
+  logoutBtn: document.getElementById("logout-btn"),
 };
+
+let authMode = "login"; // "login" | "signup"
 
 function init() {
   for (const city of CITIES) {
@@ -37,12 +47,90 @@ function init() {
   el.notifyTestBtn.addEventListener("click", onSendTestNotification);
   updateThemeToggleIcon();
 
+  el.authTabLogin.addEventListener("click", () => setAuthMode("login"));
+  el.authTabSignup.addEventListener("click", () => setAuthMode("signup"));
+  el.authForm.addEventListener("submit", onAuthSubmit);
+  el.logoutBtn.addEventListener("click", onLogout);
+
+  checkAuth();
+}
+
+function setAuthMode(mode) {
+  authMode = mode;
+  el.authTabLogin.classList.toggle("active", mode === "login");
+  el.authTabSignup.classList.toggle("active", mode === "signup");
+  el.authSubmitBtn.textContent = mode === "login" ? "Log in" : "Sign up";
+  el.authFormError.hidden = true;
+}
+
+async function checkAuth() {
+  const res = await fetch("/api/auth/me");
+  const data = await res.json();
+  if (data.loggedIn) {
+    showApp();
+  } else {
+    showAuthScreen();
+  }
+}
+
+let lastCheckedTickerStarted = false;
+
+function showApp() {
+  el.authScreen.hidden = true;
+  el.appRoot.hidden = false;
   loadState();
-  setInterval(updateLastCheckedText, 15000);
+  if (!lastCheckedTickerStarted) {
+    lastCheckedTickerStarted = true;
+    setInterval(updateLastCheckedText, 15000);
+  }
+}
+
+function showAuthScreen() {
+  el.appRoot.hidden = true;
+  el.authScreen.hidden = false;
+}
+
+async function onAuthSubmit(e) {
+  e.preventDefault();
+  el.authFormError.hidden = true;
+  const form = e.target;
+  const email = form.email.value.trim();
+  const password = form.password.value;
+
+  el.authSubmitBtn.disabled = true;
+  try {
+    const res = await fetch(`/api/auth/${authMode}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    const json = await res.json();
+    if (!json.ok) {
+      el.authFormError.textContent = json.error || "Something went wrong.";
+      el.authFormError.hidden = false;
+      return;
+    }
+    form.reset();
+    showApp();
+  } catch {
+    el.authFormError.textContent = "Network error — try again.";
+    el.authFormError.hidden = false;
+  } finally {
+    el.authSubmitBtn.disabled = false;
+  }
+}
+
+async function onLogout() {
+  await fetch("/api/auth/logout", { method: "POST" });
+  showAuthScreen();
 }
 
 async function loadState() {
   const res = await fetch("/api/state");
+  if (res.status === 401) {
+    showAuthScreen();
+    return;
+  }
   const state = await res.json();
   render(state);
 }

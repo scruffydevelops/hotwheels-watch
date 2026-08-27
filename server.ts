@@ -7,11 +7,16 @@ import {
   removeAddress,
   checkAddress,
   checkAllAddresses,
+  checkAllAddressesForUser,
   addWishlistItem,
   removeWishlistItem,
-  getNtfyTopic,
+  getNtfyTopicForUser,
+  signUp,
+  logIn,
+  getUserEmail,
 } from "./src/server/hotwheels/service";
 import { sendNtfy } from "./src/server/notify/ntfy";
+import { getUserIdFromRequest, setSessionCookie, clearSessionCookie } from "./src/server/auth";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -20,71 +25,123 @@ const CHECK_INTERVAL_MS = 5 * 60 * 1000; // auto-check every 5 minutes
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
-app.get("/api/state", async (_req, res) => {
+// ---------- Auth ----------
+
+app.post("/api/auth/signup", async (req, res) => {
   try {
-    res.json(await getState());
+    const { email, password } = req.body ?? {};
+    const { userId } = await signUp(email, password);
+    setSessionCookie(res, userId);
+    res.json({ ok: true, email: email.trim().toLowerCase() });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: message(err) });
+  }
+});
+
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const { email, password } = req.body ?? {};
+    const { userId } = await logIn(email, password);
+    setSessionCookie(res, userId);
+    res.json({ ok: true, email: email.trim().toLowerCase() });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: message(err) });
+  }
+});
+
+app.post("/api/auth/logout", (_req, res) => {
+  clearSessionCookie(res);
+  res.json({ ok: true });
+});
+
+app.get("/api/auth/me", async (req, res) => {
+  const userId = getUserIdFromRequest(req);
+  if (!userId) return res.json({ loggedIn: false });
+  const email = await getUserEmail(userId);
+  if (!email) return res.json({ loggedIn: false });
+  res.json({ loggedIn: true, email });
+});
+
+// Everything below requires a logged-in user — attaches userId onto the
+// request so route handlers don't each have to re-check.
+function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const userId = getUserIdFromRequest(req);
+  if (!userId) return res.status(401).json({ ok: false, error: "Not logged in." });
+  (req as express.Request & { userId: string }).userId = userId;
+  next();
+}
+
+function userIdOf(req: express.Request): string {
+  return (req as express.Request & { userId: string }).userId;
+}
+
+// ---------- App data ----------
+
+app.get("/api/state", requireAuth, async (req, res) => {
+  try {
+    res.json(await getState(userIdOf(req)));
   } catch (err) {
     res.status(500).json({ error: message(err) });
   }
 });
 
-app.post("/api/addresses", async (req, res) => {
+app.post("/api/addresses", requireAuth, async (req, res) => {
   try {
     const { label, city, addressText } = req.body ?? {};
-    const address = await addAddress({ label, city, addressText });
+    const address = await addAddress(userIdOf(req), { label, city, addressText });
     res.json({ ok: true, address });
   } catch (err) {
     res.status(400).json({ ok: false, error: message(err) });
   }
 });
 
-app.delete("/api/addresses/:id", async (req, res) => {
+app.delete("/api/addresses/:id", requireAuth, async (req, res) => {
   try {
-    await removeAddress(req.params.id);
+    await removeAddress(userIdOf(req), req.params.id);
     res.json({ ok: true });
   } catch (err) {
     res.status(400).json({ ok: false, error: message(err) });
   }
 });
 
-app.post("/api/addresses/:id/check", async (req, res) => {
+app.post("/api/addresses/:id/check", requireAuth, async (req, res) => {
   try {
-    const result = await checkAddress(req.params.id);
+    const result = await checkAddress(userIdOf(req), req.params.id);
     res.json({ ok: true, ...result });
   } catch (err) {
     res.status(400).json({ ok: false, error: message(err) });
   }
 });
 
-app.post("/api/check-all", async (_req, res) => {
+app.post("/api/check-all", requireAuth, async (req, res) => {
   try {
-    res.json({ ok: true, results: await checkAllAddresses() });
+    res.json({ ok: true, results: await checkAllAddressesForUser(userIdOf(req)) });
   } catch (err) {
     res.status(500).json({ ok: false, error: message(err) });
   }
 });
 
-app.post("/api/wishlist", async (req, res) => {
+app.post("/api/wishlist", requireAuth, async (req, res) => {
   try {
-    const item = await addWishlistItem(req.body?.name ?? "");
+    const item = await addWishlistItem(userIdOf(req), req.body?.name ?? "");
     res.json({ ok: true, item });
   } catch (err) {
     res.status(400).json({ ok: false, error: message(err) });
   }
 });
 
-app.delete("/api/wishlist/:id", async (req, res) => {
+app.delete("/api/wishlist/:id", requireAuth, async (req, res) => {
   try {
-    await removeWishlistItem(req.params.id);
+    await removeWishlistItem(userIdOf(req), req.params.id);
     res.json({ ok: true });
   } catch (err) {
     res.status(400).json({ ok: false, error: message(err) });
   }
 });
 
-app.post("/api/notify-test", async (_req, res) => {
+app.post("/api/notify-test", requireAuth, async (req, res) => {
   try {
-    const topic = await getNtfyTopic();
+    const topic = await getNtfyTopicForUser(userIdOf(req));
     await sendNtfy(topic, {
       title: "Hot Wheels Watch",
       message: "Test notification — if you see this, it's working!",

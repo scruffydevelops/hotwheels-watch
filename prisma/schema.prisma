@@ -11,10 +11,23 @@ datasource db {
 }
 
 // ---------- Hot Wheels stock watch ----------
-// No accounts — a single shared list of watched addresses and wishlist items.
+// Each user has their own addresses, wishlist, and notification topic.
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String
+  ntfyTopic     String    @unique
+  lastCheckedAt DateTime?
+  createdAt     DateTime  @default(now())
+
+  addresses ScalpAddress[]
+  wishlist  WishlistItem[]
+}
 
 model ScalpAddress {
   id          String @id @default(cuid())
+  userId      String
   label       String
   city        String
   addressText String
@@ -24,22 +37,19 @@ model ScalpAddress {
 
   createdAt DateTime @default(now())
 
+  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   products TrackedProduct[]
 }
 
 // A specific product name/keyword to search for, in addition to the generic
-// "hot wheels" search, at every saved address.
+// "hot wheels" search, at every saved address for this user.
 model WishlistItem {
   id        String   @id @default(cuid())
+  userId    String
   name      String
   createdAt DateTime @default(now())
-}
 
-// Generic key-value settings store. Currently just holds the ntfy.sh topic
-// name, generated once and persisted so it survives server restarts.
-model AppSetting {
-  key   String @id
-  value String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model TrackedProduct {

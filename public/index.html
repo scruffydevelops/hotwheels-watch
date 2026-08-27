@@ -16,18 +16,45 @@
   </script>
 </head>
 <body>
-  <header class="topbar">
-    <div class="topbar-inner">
+  <div id="auth-screen" class="auth-screen">
+    <div class="auth-card">
       <span class="brand">🏎️ <span class="brand-hot">HOT</span> WHEELS WATCH</span>
-      <div class="topbar-actions">
-        <span id="last-checked" class="last-checked" hidden></span>
-        <button id="check-all-btn" class="btn btn-outline btn-sm">Check all now</button>
-        <button id="theme-toggle-btn" class="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">🌙</button>
-      </div>
-    </div>
-  </header>
+      <p class="auth-tagline">Sign in to track your own addresses and wishlist.</p>
 
-  <main class="page">
+      <div class="auth-tabs">
+        <button type="button" id="auth-tab-login" class="auth-tab active">Log in</button>
+        <button type="button" id="auth-tab-signup" class="auth-tab">Sign up</button>
+      </div>
+
+      <form id="auth-form" class="auth-form">
+        <div class="field">
+          <label for="auth-email">Email</label>
+          <input id="auth-email" name="email" type="email" placeholder="you@example.com" required />
+        </div>
+        <div class="field">
+          <label for="auth-password">Password</label>
+          <input id="auth-password" name="password" type="password" placeholder="At least 8 characters" required minlength="8" />
+        </div>
+        <button type="submit" class="btn btn-primary" id="auth-submit-btn">Log in</button>
+      </form>
+      <p id="auth-form-error" class="error-text" hidden></p>
+    </div>
+  </div>
+
+  <div id="app" hidden>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <span class="brand">🏎️ <span class="brand-hot">HOT</span> WHEELS WATCH</span>
+        <div class="topbar-actions">
+          <span id="last-checked" class="last-checked" hidden></span>
+          <button id="check-all-btn" class="btn btn-outline btn-sm">Check all now</button>
+          <button id="theme-toggle-btn" class="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">🌙</button>
+          <button id="logout-btn" class="btn btn-outline btn-sm" title="Log out">Log out</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="page">
     <div class="main-col">
       <p class="lede">
         Track Blinkit, Zepto, and BigBasket stock for Hot Wheels near your saved addresses. Auto-checks every 5 minutes —
@@ -88,7 +115,8 @@
         <div id="wishlist-matches"></div>
       </section>
     </aside>
-  </main>
+    </main>
+  </div>
 
   <div id="toast" class="toast" hidden></div>
 

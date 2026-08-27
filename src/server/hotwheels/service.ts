@@ -3,10 +3,9 @@ import { pollBlinkit, type BlinkitProduct } from "./blinkit";
 import { pollZepto, type ZeptoProduct } from "./zepto";
 import { pollBigBasket, type BigBasketProduct } from "./bigbasket";
 import { sendNtfy, generateTopicName } from "../notify/ntfy";
+import { hashPassword, verifyPassword } from "../auth";
 
 const GENERIC_QUERY = "hot wheels";
-const NTFY_TOPIC_KEY = "ntfyTopic";
-const LAST_CHECKED_KEY = "lastCheckedAt";
 
 // All platforms' product shapes are structurally identical for our purposes —
 // this lets the matching/upsert logic below stay platform-agnostic.
@@ -53,35 +52,60 @@ async function pollWithRetry(
   }
 }
 
-export async function getNtfyTopic(): Promise<string> {
-  const existing = await prisma.appSetting.findUnique({ where: { key: NTFY_TOPIC_KEY } });
-  if (existing) return existing.value;
+// ---------- Auth ----------
 
-  const topic = generateTopicName();
-  await prisma.appSetting.create({ data: { key: NTFY_TOPIC_KEY, value: topic } });
-  return topic;
+export interface AuthResult {
+  userId: string;
 }
 
-export async function getState() {
-  const [addresses, wishlist, ntfyTopic, lastCheckedSetting] = await Promise.all([
+export async function signUp(email: string, password: string): Promise<AuthResult> {
+  const trimmedEmail = email.trim().toLowerCase();
+  if (!trimmedEmail || !trimmedEmail.includes("@")) throw new Error("A valid email is required.");
+  if (!password || password.length < 8) throw new Error("Password must be at least 8 characters.");
+
+  const existing = await prisma.user.findUnique({ where: { email: trimmedEmail } });
+  if (existing) throw new Error("An account with that email already exists.");
+
+  const passwordHash = await hashPassword(password);
+  const user = await prisma.user.create({
+    data: { email: trimmedEmail, passwordHash, ntfyTopic: generateTopicName() },
+  });
+  return { userId: user.id };
+}
+
+export async function logIn(email: string, password: string): Promise<AuthResult> {
+  const trimmedEmail = email.trim().toLowerCase();
+  const user = await prisma.user.findUnique({ where: { email: trimmedEmail } });
+  if (!user) throw new Error("Incorrect email or password.");
+
+  const valid = await verifyPassword(password, user.passwordHash);
+  if (!valid) throw new Error("Incorrect email or password.");
+
+  return { userId: user.id };
+}
+
+export async function getUserEmail(userId: string): Promise<string | null> {
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
+  return user?.email ?? null;
+}
+
+// ---------- State ----------
+
+export async function getState(userId: string) {
+  const [addresses, wishlist, user] = await Promise.all([
     prisma.scalpAddress.findMany({
+      where: { userId },
       orderBy: { createdAt: "asc" },
       include: { products: { orderBy: { lastSeenAt: "desc" } } },
     }),
-    prisma.wishlistItem.findMany({ orderBy: { createdAt: "asc" } }),
-    getNtfyTopic(),
-    prisma.appSetting.findUnique({ where: { key: LAST_CHECKED_KEY } }),
+    prisma.wishlistItem.findMany({ where: { userId }, orderBy: { createdAt: "asc" } }),
+    prisma.user.findUnique({ where: { id: userId }, select: { ntfyTopic: true, lastCheckedAt: true } }),
   ]);
-  return { addresses, wishlist, ntfyTopic, lastCheckedAt: lastCheckedSetting?.value ?? null };
+  return { addresses, wishlist, ntfyTopic: user?.ntfyTopic ?? null, lastCheckedAt: user?.lastCheckedAt ?? null };
 }
 
-async function setLastCheckedAt() {
-  const value = new Date().toISOString();
-  await prisma.appSetting.upsert({
-    where: { key: LAST_CHECKED_KEY },
-    create: { key: LAST_CHECKED_KEY, value },
-    update: { value },
-  });
+async function setLastCheckedAt(userId: string) {
+  await prisma.user.update({ where: { id: userId }, data: { lastCheckedAt: new Date() } });
 }
 
 // This tracker is specifically for Hot Wheels — every result must actually be
@@ -191,8 +215,8 @@ async function upsertProducts(
   return { newCount, restockedCount, notable };
 }
 
-async function getWishlistNames(): Promise<string[]> {
-  const wishlist = await prisma.wishlistItem.findMany();
+async function getWishlistNames(userId: string): Promise<string[]> {
+  const wishlist = await prisma.wishlistItem.findMany({ where: { userId } });
   return wishlist.map((w) => w.name);
 }
 
@@ -202,7 +226,7 @@ export interface AddAddressInput {
   addressText: string;
 }
 
-export async function addAddress({ label, city, addressText }: AddAddressInput) {
+export async function addAddress(userId: string, { label, city, addressText }: AddAddressInput) {
   const trimmedLabel = label.trim();
   const trimmedCity = city.trim();
   const trimmedAddressText = addressText.trim();
@@ -211,7 +235,7 @@ export async function addAddress({ label, city, addressText }: AddAddressInput) 
   }
 
   const query = `${trimmedAddressText}, ${trimmedCity}`;
-  const wishlistNames = await getWishlistNames();
+  const wishlistNames = await getWishlistNames(userId);
 
   // Blinkit resolves first and its coordinates are stored for reference — the
   // other platforms each resolve the same address text independently, since
@@ -219,7 +243,7 @@ export async function addAddress({ label, city, addressText }: AddAddressInput) 
   const blinkitResult = await pollBlinkit(query, [GENERIC_QUERY]).catch(() => pollBlinkit(query, [GENERIC_QUERY]));
 
   const address = await prisma.scalpAddress.create({
-    data: { label: trimmedLabel, city: trimmedCity, addressText: trimmedAddressText, query, lat: blinkitResult.lat, lng: blinkitResult.lng },
+    data: { userId, label: trimmedLabel, city: trimmedCity, addressText: trimmedAddressText, query, lat: blinkitResult.lat, lng: blinkitResult.lng },
   });
 
   await upsertProducts(
@@ -251,7 +275,17 @@ export async function addAddress({ label, city, addressText }: AddAddressInput) 
   return address;
 }
 
-export async function removeAddress(addressId: string) {
+// Verifies the address belongs to this user before touching it — without
+// this check, any logged-in user could remove or trigger checks on another
+// user's address just by guessing/enumerating ids.
+async function assertOwnsAddress(userId: string, addressId: string) {
+  const address = await prisma.scalpAddress.findUnique({ where: { id: addressId } });
+  if (!address || address.userId !== userId) throw new Error("Address not found.");
+  return address;
+}
+
+export async function removeAddress(userId: string, addressId: string) {
+  await assertOwnsAddress(userId, addressId);
   await prisma.scalpAddress.delete({ where: { id: addressId } });
 }
 
@@ -260,11 +294,10 @@ export interface CheckResult {
   restockedCount: number;
 }
 
-export async function checkAddress(addressId: string): Promise<CheckResult> {
-  const address = await prisma.scalpAddress.findUnique({ where: { id: addressId } });
-  if (!address) throw new Error("Address not found.");
+export async function checkAddress(userId: string, addressId: string): Promise<CheckResult> {
+  const address = await assertOwnsAddress(userId, addressId);
 
-  const wishlistNames = await getWishlistNames();
+  const wishlistNames = await getWishlistNames(userId);
   const notable: PlatformProduct[] = [];
   let newCount = 0;
   let restockedCount = 0;
@@ -287,70 +320,93 @@ export async function checkAddress(addressId: string): Promise<CheckResult> {
     }
   }
 
-  await setLastCheckedAt();
+  await setLastCheckedAt(userId);
 
   if (notable.length > 0) {
-    const topic = await getNtfyTopic();
-    const lines = notable.slice(0, 5).map((p) => `${p.name}${p.price ? ` — ₹${p.price}` : ""}\n${p.productUrl}`);
-    if (notable.length > 5) lines.push(`...and ${notable.length - 5} more`);
-    try {
-      await sendNtfy(topic, {
-        title: `Hot Wheels — ${address.label}`,
-        message: lines.join("\n\n"),
-        // Max/urgent priority — ntfy's apps play a sound (and on Android,
-        // show an insistent notification) by default at this level, unlike
-        // the lower priorities which are silent by default. Plain "high"
-        // (4) doesn't reliably make noise across clients.
-        priority: 5,
-        tags: ["rotating_light"],
-        // Tapping the notification opens the product directly when there's just one;
-        // with several, the message body above lists a link per product instead.
-        click: notable.length === 1 ? notable[0].productUrl : undefined,
-      });
-    } catch (err) {
-      console.error("[ntfy] Failed to send notification:", err);
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { ntfyTopic: true } });
+    if (user) {
+      const lines = notable.slice(0, 5).map((p) => `${p.name}${p.price ? ` — ₹${p.price}` : ""}\n${p.productUrl}`);
+      if (notable.length > 5) lines.push(`...and ${notable.length - 5} more`);
+      try {
+        await sendNtfy(user.ntfyTopic, {
+          title: `Hot Wheels — ${address.label}`,
+          message: lines.join("\n\n"),
+          // Max/urgent priority — ntfy's apps play a sound (and on Android,
+          // show an insistent notification) by default at this level, unlike
+          // the lower priorities which are silent by default. Plain "high"
+          // (4) doesn't reliably make noise across clients.
+          priority: 5,
+          tags: ["rotating_light"],
+          // Tapping the notification opens the product directly when there's just one;
+          // with several, the message body above lists a link per product instead.
+          click: notable.length === 1 ? notable[0].productUrl : undefined,
+        });
+      } catch (err) {
+        console.error("[ntfy] Failed to send notification:", err);
+      }
     }
   }
 
   return { newCount, restockedCount };
 }
 
-// Runs every saved address through checkAddress, sequentially (one headless
-// browser at a time per platform) to stay polite to every platform. Used by
-// the 5-minute cron and can also be triggered manually via POST /api/check-all.
+// Runs every saved address for every user, sequentially (one headless
+// browser at a time per platform) to stay polite to every platform. Used
+// only by the 5-minute cron — a single user triggering "Check all now"
+// should only re-check their own addresses, not every account's (see
+// checkAllAddressesForUser below).
 export async function checkAllAddresses(): Promise<Record<string, CheckResult | { error: string }>> {
-  const addresses = await prisma.scalpAddress.findMany({ select: { id: true } });
-  const results: Record<string, CheckResult | { error: string }> = {};
+  const addresses = await prisma.scalpAddress.findMany({ select: { id: true, userId: true } });
+  return checkMany(addresses);
+}
 
-  for (const { id } of addresses) {
+export async function checkAllAddressesForUser(userId: string): Promise<Record<string, CheckResult | { error: string }>> {
+  const addresses = await prisma.scalpAddress.findMany({ where: { userId }, select: { id: true, userId: true } });
+  return checkMany(addresses);
+}
+
+async function checkMany(addresses: { id: string; userId: string }[]) {
+  const results: Record<string, CheckResult | { error: string }> = {};
+  for (const { id, userId } of addresses) {
     try {
-      results[id] = await checkAddress(id);
+      results[id] = await checkAddress(userId, id);
     } catch (err) {
       results[id] = { error: err instanceof Error ? err.message : "Check failed." };
     }
   }
-
   return results;
 }
 
-export async function addWishlistItem(name: string) {
+export async function addWishlistItem(userId: string, name: string) {
   const trimmed = name.trim();
   if (!trimmed) throw new Error("Wishlist item name is required.");
-  const item = await prisma.wishlistItem.create({ data: { name: trimmed } });
+  const item = await prisma.wishlistItem.create({ data: { userId, name: trimmed } });
 
   // Match against products already sitting in the DB from past checks, rather
   // than waiting for the next poll cycle — the term might match things we've
-  // already seen. Only touches rows still tagged with the generic query, so
-  // it never overwrites a product that's already tied to a different
-  // wishlist term.
+  // already seen. Only touches rows still tagged with the generic query, on
+  // addresses belonging to this user, so it never overwrites a product
+  // that's already tied to a different wishlist term or another user's data.
   await prisma.trackedProduct.updateMany({
-    where: { sourceQuery: GENERIC_QUERY, name: { contains: trimmed, mode: "insensitive" } },
+    where: {
+      sourceQuery: GENERIC_QUERY,
+      name: { contains: trimmed, mode: "insensitive" },
+      address: { userId },
+    },
     data: { sourceQuery: trimmed },
   });
 
   return item;
 }
 
-export async function removeWishlistItem(id: string) {
+export async function removeWishlistItem(userId: string, id: string) {
+  const item = await prisma.wishlistItem.findUnique({ where: { id } });
+  if (!item || item.userId !== userId) throw new Error("Wishlist item not found.");
   await prisma.wishlistItem.delete({ where: { id } });
+}
+
+export async function getNtfyTopicForUser(userId: string): Promise<string> {
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { ntfyTopic: true } });
+  if (!user) throw new Error("User not found.");
+  return user.ntfyTopic;
 }
