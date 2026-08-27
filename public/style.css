@@ -403,6 +403,11 @@ a.product-card:hover {
   padding: 1.5rem;
   background: var(--track-black);
 }
+/* [hidden] alone loses to the class rule above (equal specificity, this
+   stylesheet loads after the UA default) — without this override, setting
+   el.hidden = true in JS had no visible effect and the login card stayed
+   on screen, stacked above the dashboard instead of being replaced by it. */
+#auth-screen[hidden] { display: none; }
 .auth-card {
   width: 100%;
   max-width: 380px;
