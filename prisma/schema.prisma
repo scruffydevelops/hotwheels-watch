@@ -32,8 +32,12 @@ model ScalpAddress {
   city        String
   addressText String
   query       String // combined "addressText, city" string used for geocoding + search
-  lat         Float
-  lng         Float
+  // Only Blinkit's location lookup ever populates these (nothing else reads
+  // them), and Blinkit is disabled in production (see BLINKIT_ENABLED in
+  // service.ts — Blinkit's WAF flat-out blocks Railway's IP range), so they
+  // go unset there.
+  lat         Float?
+  lng         Float?
 
   createdAt DateTime @default(now())
 

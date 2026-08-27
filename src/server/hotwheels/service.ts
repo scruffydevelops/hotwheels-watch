@@ -24,11 +24,21 @@ interface PlatformPollResult {
 // just "Aston Martin"). Matching wishlist terms as a substring against the
 // generic results we already have is strictly more reliable and needs no
 // extra requests.
-const PLATFORMS: { name: PlatformName; poll: (query: string, searchQueries: string[]) => Promise<PlatformPollResult> }[] = [
+// Confirmed live: Blinkit's WAF returns a flat 403 for every request from
+// Railway's IP range (even a bare homepage curl, no Playwright involved) —
+// an IP-reputation block, same category as the Instamart block we hit
+// locally, not something fixable by tuning headers/fingerprints. It works
+// fine from a home connection, so it's only disabled where NODE_ENV is
+// "production" (set in the Dockerfile for the hosted deploy) — local dev
+// keeps Blinkit working as before.
+const BLINKIT_ENABLED = process.env.NODE_ENV !== "production";
+
+const ALL_PLATFORMS: { name: PlatformName; poll: (query: string, searchQueries: string[]) => Promise<PlatformPollResult> }[] = [
   { name: "blinkit", poll: pollBlinkit },
   { name: "zepto", poll: pollZepto },
   { name: "bigbasket", poll: pollBigBasket },
 ];
+const PLATFORMS = BLINKIT_ENABLED ? ALL_PLATFORMS : ALL_PLATFORMS.filter((p) => p.name !== "blinkit");
 
 // Location resolution on each platform (autocomplete calls, DOM clicks) is
 // flaky enough that a poll fails outright with some regularity — confirmed
@@ -219,22 +229,31 @@ export async function addAddress(userId: string, { label, city, addressText }: A
   const query = `${trimmedAddressText}, ${trimmedCity}`;
   const wishlistNames = await getWishlistNames(userId);
 
-  // Blinkit resolves first and its coordinates are stored for reference — the
-  // other platforms each resolve the same address text independently, since
-  // coverage/geocoding can differ platform to platform.
-  const blinkitResult = await pollBlinkit(query, [GENERIC_QUERY]).catch(() => pollBlinkit(query, [GENERIC_QUERY]));
-
   const address = await prisma.scalpAddress.create({
-    data: { userId, label: trimmedLabel, city: trimmedCity, addressText: trimmedAddressText, query, lat: blinkitResult.lat, lng: blinkitResult.lng },
+    data: { userId, label: trimmedLabel, city: trimmedCity, addressText: trimmedAddressText, query },
   });
 
-  await upsertProducts(
-    address.id,
-    "blinkit",
-    blinkitResult.resultsByQuery[0]?.products ?? [],
-    blinkitResult.resultsByQuery[0]?.complete ?? false,
-    wishlistNames
-  );
+  // Blinkit resolves first (when enabled) and its coordinates are stored for
+  // reference — nothing else in the app reads lat/lng, so this is skipped
+  // entirely rather than left to fail when Blinkit is disabled.
+  if (BLINKIT_ENABLED) {
+    try {
+      const blinkitResult = await pollBlinkit(query, [GENERIC_QUERY]).catch(() => pollBlinkit(query, [GENERIC_QUERY]));
+      await prisma.scalpAddress.update({
+        where: { id: address.id },
+        data: { lat: blinkitResult.lat, lng: blinkitResult.lng },
+      });
+      await upsertProducts(
+        address.id,
+        "blinkit",
+        blinkitResult.resultsByQuery[0]?.products ?? [],
+        blinkitResult.resultsByQuery[0]?.complete ?? false,
+        wishlistNames
+      );
+    } catch (err) {
+      console.error("[blinkit] Failed during address creation:", err);
+    }
+  }
 
   // Other platforms don't cover every area Blinkit does — don't fail adding
   // the address just because one has no coverage there.
