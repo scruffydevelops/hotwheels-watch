@@ -35,6 +35,21 @@ const CHECK_INTERVAL_MS = 5 * 60 * 1000; // auto-check every 5 minutes
 app.set("trust proxy", 1);
 
 app.use(express.json());
+
+// Every /api response depends on the caller's session cookie, but Express
+// auto-generates an ETag on JSON bodies regardless — without this, the
+// logged-out {"loggedIn":false} response from /api/auth/me gets cached
+// (by the browser, and/or Railway's edge) and keeps getting served back as
+// a 304 even after a real, successful login, since 304 revalidation only
+// looks at the URL/ETag, not the Cookie header. Confirmed live: after
+// switching to Google sign-in, the server-side session was correct on every
+// request, but the client kept seeing the stale pre-login response and
+// never left the login screen.
+app.use("/api", (_req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  next();
+});
+
 app.use(express.static(path.join(__dirname, "public")));
 
 // ---------- Auth ----------
