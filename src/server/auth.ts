@@ -1,34 +1,15 @@
-import { randomBytes, scrypt, timingSafeEqual, createHmac } from "node:crypto";
-import { promisify } from "node:util";
+import { timingSafeEqual, createHmac } from "node:crypto";
 import type { Request, Response } from "express";
 
-const scryptAsync = promisify(scrypt);
 const SESSION_COOKIE = "hw_session";
+const OAUTH_STATE_COOKIE = "hw_oauth_state";
 const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const OAUTH_STATE_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes — just long enough for the Google redirect round trip
 
 function getSecret(): string {
   const secret = process.env.AUTH_SECRET;
   if (!secret) throw new Error("AUTH_SECRET is not set — required to sign session cookies.");
   return secret;
-}
-
-// scrypt (Node's built-in, no extra dependency) with a random salt per
-// password, stored alongside the hash as "salt:hash" — standard practice
-// since a shared/fixed salt would make identical passwords produce
-// identical hashes, defeating the point of salting.
-export async function hashPassword(password: string): Promise<string> {
-  const salt = randomBytes(16).toString("hex");
-  const derived = (await scryptAsync(password, salt, 64)) as Buffer;
-  return `${salt}:${derived.toString("hex")}`;
-}
-
-export async function verifyPassword(password: string, stored: string): Promise<boolean> {
-  const [salt, hashHex] = stored.split(":");
-  if (!salt || !hashHex) return false;
-  const derived = (await scryptAsync(password, salt, 64)) as Buffer;
-  const stored_ = Buffer.from(hashHex, "hex");
-  if (derived.length !== stored_.length) return false;
-  return timingSafeEqual(derived, stored_);
 }
 
 // A signed, stateless session: base64url(json) + "." + HMAC-SHA256 signature.
@@ -93,4 +74,21 @@ export function setSessionCookie(res: Response, userId: string) {
 
 export function clearSessionCookie(res: Response) {
   res.clearCookie(SESSION_COOKIE);
+}
+
+// ---------- OAuth state (CSRF protection for the Google redirect) ----------
+
+export function setOAuthStateCookie(res: Response, state: string) {
+  res.cookie(OAUTH_STATE_COOKIE, state, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    maxAge: OAUTH_STATE_MAX_AGE_MS,
+  });
+}
+
+export function readAndClearOAuthStateCookie(req: Request, res: Response): string | undefined {
+  const value = readCookie(req, OAUTH_STATE_COOKIE);
+  res.clearCookie(OAUTH_STATE_COOKIE);
+  return value;
 }

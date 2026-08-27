@@ -22,15 +22,9 @@ const el = {
   notifyTestBtn: document.getElementById("notify-test-btn"),
   authScreen: document.getElementById("auth-screen"),
   appRoot: document.getElementById("app"),
-  authTabLogin: document.getElementById("auth-tab-login"),
-  authTabSignup: document.getElementById("auth-tab-signup"),
-  authForm: document.getElementById("auth-form"),
-  authSubmitBtn: document.getElementById("auth-submit-btn"),
   authFormError: document.getElementById("auth-form-error"),
   logoutBtn: document.getElementById("logout-btn"),
 };
-
-let authMode = "login"; // "login" | "signup"
 
 function init() {
   for (const city of CITIES) {
@@ -47,20 +41,22 @@ function init() {
   el.notifyTestBtn.addEventListener("click", onSendTestNotification);
   updateThemeToggleIcon();
 
-  el.authTabLogin.addEventListener("click", () => setAuthMode("login"));
-  el.authTabSignup.addEventListener("click", () => setAuthMode("signup"));
-  el.authForm.addEventListener("submit", onAuthSubmit);
   el.logoutBtn.addEventListener("click", onLogout);
 
+  showAuthErrorFromUrl();
   checkAuth();
 }
 
-function setAuthMode(mode) {
-  authMode = mode;
-  el.authTabLogin.classList.toggle("active", mode === "login");
-  el.authTabSignup.classList.toggle("active", mode === "signup");
-  el.authSubmitBtn.textContent = mode === "login" ? "Log in" : "Sign up";
-  el.authFormError.hidden = true;
+// Google sign-in failures land back on "/" with ?auth_error=... (set by the
+// server's OAuth callback) rather than an in-page fetch response, since the
+// whole flow is a full-page redirect through Google, not an XHR.
+function showAuthErrorFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const err = params.get("auth_error");
+  if (!err) return;
+  el.authFormError.textContent = err;
+  el.authFormError.hidden = false;
+  window.history.replaceState({}, "", window.location.pathname);
 }
 
 async function checkAuth() {
@@ -88,36 +84,6 @@ function showApp() {
 function showAuthScreen() {
   el.appRoot.hidden = true;
   el.authScreen.hidden = false;
-}
-
-async function onAuthSubmit(e) {
-  e.preventDefault();
-  el.authFormError.hidden = true;
-  const form = e.target;
-  const email = form.email.value.trim();
-  const password = form.password.value;
-
-  el.authSubmitBtn.disabled = true;
-  try {
-    const res = await fetch(`/api/auth/${authMode}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    });
-    const json = await res.json();
-    if (!json.ok) {
-      el.authFormError.textContent = json.error || "Something went wrong.";
-      el.authFormError.hidden = false;
-      return;
-    }
-    form.reset();
-    showApp();
-  } catch {
-    el.authFormError.textContent = "Network error — try again.";
-    el.authFormError.hidden = false;
-  } finally {
-    el.authSubmitBtn.disabled = false;
-  }
 }
 
 async function onLogout() {

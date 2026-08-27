@@ -11,41 +11,62 @@ import {
   addWishlistItem,
   removeWishlistItem,
   getNtfyTopicForUser,
-  signUp,
-  logIn,
+  findOrCreateGoogleUser,
   getUserEmail,
 } from "./src/server/hotwheels/service";
 import { sendNtfy } from "./src/server/notify/ntfy";
-import { getUserIdFromRequest, setSessionCookie, clearSessionCookie } from "./src/server/auth";
+import {
+  getUserIdFromRequest,
+  setSessionCookie,
+  clearSessionCookie,
+  setOAuthStateCookie,
+  readAndClearOAuthStateCookie,
+} from "./src/server/auth";
+import { generateOAuthState, buildGoogleAuthUrl, exchangeCodeForProfile } from "./src/server/google-oauth";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const CHECK_INTERVAL_MS = 5 * 60 * 1000; // auto-check every 5 minutes
+
+// Railway (like most PaaS) terminates TLS at its edge and forwards to the
+// container over plain HTTP — without this, req.protocol always reports
+// "http" even on the public https:// URL, which would build a Google
+// redirect_uri that doesn't match what's registered in Google Cloud Console.
+app.set("trust proxy", 1);
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
 // ---------- Auth ----------
 
-app.post("/api/auth/signup", async (req, res) => {
+function googleRedirectUri(req: express.Request): string {
+  return `${req.protocol}://${req.get("host")}/api/auth/google/callback`;
+}
+
+app.get("/api/auth/google", (req, res) => {
   try {
-    const { email, password } = req.body ?? {};
-    const { userId } = await signUp(email, password);
-    setSessionCookie(res, userId);
-    res.json({ ok: true, email: email.trim().toLowerCase() });
+    const state = generateOAuthState();
+    setOAuthStateCookie(res, state);
+    res.redirect(buildGoogleAuthUrl(googleRedirectUri(req), state));
   } catch (err) {
-    res.status(400).json({ ok: false, error: message(err) });
+    res.status(500).send(message(err));
   }
 });
 
-app.post("/api/auth/login", async (req, res) => {
+app.get("/api/auth/google/callback", async (req, res) => {
   try {
-    const { email, password } = req.body ?? {};
-    const { userId } = await logIn(email, password);
+    const { code, state } = req.query;
+    const expectedState = readAndClearOAuthStateCookie(req, res);
+    if (!state || state !== expectedState) throw new Error("Invalid OAuth state — please try signing in again.");
+    if (typeof code !== "string") throw new Error("Google didn't return an authorization code.");
+
+    const profile = await exchangeCodeForProfile(code, googleRedirectUri(req));
+    const { userId } = await findOrCreateGoogleUser(profile.googleId, profile.email);
     setSessionCookie(res, userId);
-    res.json({ ok: true, email: email.trim().toLowerCase() });
+    res.redirect("/");
   } catch (err) {
-    res.status(400).json({ ok: false, error: message(err) });
+    console.error("[google-oauth] Sign-in failed:", err);
+    res.redirect(`/?auth_error=${encodeURIComponent(message(err))}`);
   }
 });
 

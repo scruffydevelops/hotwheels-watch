@@ -3,7 +3,6 @@ import { pollBlinkit, type BlinkitProduct } from "./blinkit";
 import { pollZepto, type ZeptoProduct } from "./zepto";
 import { pollBigBasket, type BigBasketProduct } from "./bigbasket";
 import { sendNtfy, generateTopicName } from "../notify/ntfy";
-import { hashPassword, verifyPassword } from "../auth";
 
 const GENERIC_QUERY = "hot wheels";
 
@@ -54,33 +53,16 @@ async function pollWithRetry(
 
 // ---------- Auth ----------
 
-export interface AuthResult {
-  userId: string;
-}
+// Finds the user for this Google account, or creates one on first sign-in.
+// Google is the sole identity source now — there's no separate password to
+// manage, so "log in" and "sign up" collapse into the same operation.
+export async function findOrCreateGoogleUser(googleId: string, email: string): Promise<{ userId: string }> {
+  const existing = await prisma.user.findUnique({ where: { googleId } });
+  if (existing) return { userId: existing.id };
 
-export async function signUp(email: string, password: string): Promise<AuthResult> {
-  const trimmedEmail = email.trim().toLowerCase();
-  if (!trimmedEmail || !trimmedEmail.includes("@")) throw new Error("A valid email is required.");
-  if (!password || password.length < 8) throw new Error("Password must be at least 8 characters.");
-
-  const existing = await prisma.user.findUnique({ where: { email: trimmedEmail } });
-  if (existing) throw new Error("An account with that email already exists.");
-
-  const passwordHash = await hashPassword(password);
   const user = await prisma.user.create({
-    data: { email: trimmedEmail, passwordHash, ntfyTopic: generateTopicName() },
+    data: { googleId, email: email.trim().toLowerCase(), ntfyTopic: generateTopicName() },
   });
-  return { userId: user.id };
-}
-
-export async function logIn(email: string, password: string): Promise<AuthResult> {
-  const trimmedEmail = email.trim().toLowerCase();
-  const user = await prisma.user.findUnique({ where: { email: trimmedEmail } });
-  if (!user) throw new Error("Incorrect email or password.");
-
-  const valid = await verifyPassword(password, user.passwordHash);
-  if (!valid) throw new Error("Incorrect email or password.");
-
   return { userId: user.id };
 }
 
