@@ -1,0 +1,67 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------- Hot Wheels stock watch ----------
+// No accounts — a single shared list of watched addresses and wishlist items.
+
+model ScalpAddress {
+  id          String @id @default(cuid())
+  label       String
+  city        String
+  addressText String
+  query       String // combined "addressText, city" string used for geocoding + search
+  lat         Float
+  lng         Float
+
+  createdAt DateTime @default(now())
+
+  products TrackedProduct[]
+}
+
+// A specific product name/keyword to search for, in addition to the generic
+// "hot wheels" search, at every saved address.
+model WishlistItem {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+}
+
+// Generic key-value settings store. Currently just holds the ntfy.sh topic
+// name, generated once and persisted so it survives server restarts.
+model AppSetting {
+  key   String @id
+  value String
+}
+
+model TrackedProduct {
+  id          String  @id @default(cuid())
+  addressId   String
+  platform    String  @default("blinkit")
+  productId   String
+  name        String
+  brand       String?
+  price       Float?
+  mrp         Float?
+  inventory   Int?
+  imageUrl    String?
+  productUrl  String?
+  inStock     Boolean @default(true)
+  sourceQuery String  @default("hot wheels") // which search term found this product
+
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @updatedAt
+
+  address ScalpAddress @relation(fields: [addressId], references: [id], onDelete: Cascade)
+
+  @@unique([addressId, platform, productId])
+  @@index([addressId, lastSeenAt])
+}

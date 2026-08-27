@@ -39,3 +39,19 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# prisma generated client
+/src/generated/prisma
+
+# local tooling/editor config — not part of the app
+/.agents/
+/.claude/
+/.windsurf/
+/.mcp.json
+skills-lock.json
+
+# unrelated scratch file from an unrelated session
+cornfield-generator.lua
+
+# ad-hoc test scripts (see scratch-*.mts throughout this project's history)
+scratch-*.mts

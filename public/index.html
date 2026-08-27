@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hot Wheels Watch</title>
+  <link rel="stylesheet" href="/style.css" />
+  <script>
+    // Applied before paint so there's no flash of the wrong theme.
+    (function () {
+      var saved = localStorage.getItem("theme");
+      if (saved === "light" || saved === "dark") {
+        document.documentElement.setAttribute("data-theme", saved);
+      }
+    })();
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <span class="brand">🏎️ <span class="brand-hot">HOT</span> WHEELS WATCH</span>
+      <div class="topbar-actions">
+        <span id="last-checked" class="last-checked" hidden></span>
+        <button id="check-all-btn" class="btn btn-outline btn-sm">Check all now</button>
+        <button id="theme-toggle-btn" class="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">🌙</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="page">
+    <div class="main-col">
+      <p class="lede">
+        Track Blinkit, Zepto, and BigBasket stock for Hot Wheels near your saved addresses. Auto-checks every 5 minutes —
+        add wishlist items to search for something specific everywhere.
+      </p>
+
+      <section class="card">
+        <h2>Add an address to watch</h2>
+        <form id="address-form" class="form-grid">
+          <div class="field">
+            <label for="label-input">Name</label>
+            <input id="label-input" name="label" placeholder="e.g. Home" required />
+          </div>
+          <div class="field">
+            <label for="city-select">City</label>
+            <select id="city-select" name="city" required>
+              <option value="" disabled selected>Select a city</option>
+            </select>
+          </div>
+          <div class="field field-wide">
+            <label for="address-input">Area / address</label>
+            <input id="address-input" name="addressText" placeholder="e.g. Connaught Place" required />
+          </div>
+          <button type="submit" class="btn btn-primary">Add address</button>
+        </form>
+        <p id="address-form-error" class="error-text" hidden></p>
+      </section>
+
+      <section class="card">
+        <h2>Push notifications</h2>
+        <p class="hint">
+          Get a phone notification whenever a check finds something new or back in stock, via
+          <a href="https://ntfy.sh" target="_blank" rel="noopener">ntfy.sh</a> (free, no signup).
+        </p>
+        <ol class="hint" style="padding-left: 1.1rem; margin: 0 0 0.75rem;">
+          <li>Open <span id="ntfy-link-wrap"><a id="ntfy-link" href="#" target="_blank" rel="noopener">this link</a></span> on your phone</li>
+          <li>Tap "Subscribe" — or "Add to Home Screen" first for background notifications</li>
+        </ol>
+        <button id="notify-test-btn" class="btn btn-outline btn-sm">Send test notification</button>
+      </section>
+
+      <div id="addresses"></div>
+    </div>
+
+    <aside class="side-col">
+      <section class="card wishlist-card">
+        <h2>Wishlist</h2>
+        <p class="hint">Specific products to search for at every address, in addition to general "hot wheels" results.</p>
+        <form id="wishlist-form" class="form-inline">
+          <input id="wishlist-input" name="name" placeholder="e.g. Hot Wheels Nissan Skyline" required />
+          <button type="submit" class="btn btn-primary btn-sm">Add</button>
+        </form>
+        <ul id="wishlist-list" class="chip-list"></ul>
+      </section>
+
+      <section class="card wishlist-matches-card">
+        <h2>⭐ Wishlist matches</h2>
+        <div id="wishlist-matches"></div>
+      </section>
+    </aside>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
