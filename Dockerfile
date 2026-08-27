@@ -7,10 +7,13 @@ FROM mcr.microsoft.com/playwright:v1.62.1-jammy
 WORKDIR /app
 
 COPY package.json package-lock.json ./
+# The postinstall hook (`prisma generate`) runs during `npm ci`, so the
+# schema needs to already be in place before that step — otherwise it fails
+# looking for prisma/schema.prisma, which hasn't been copied in yet.
+COPY prisma ./prisma
 RUN npm ci
 
 COPY . .
-RUN npx prisma generate
 
 ENV NODE_ENV=production
 EXPOSE 3000
