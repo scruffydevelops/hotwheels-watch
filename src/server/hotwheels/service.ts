@@ -107,6 +107,16 @@ function isHotWheelsBranded(p: PlatformProduct): boolean {
   return p.name.toLowerCase().includes("hot wheels");
 }
 
+// Wishlist matching is a plain substring check, so punctuation differences
+// that don't change the model name at all — "MX-5" vs "MX 5", "Nissan GT-R"
+// vs "Nissan GTR" — silently broke it (confirmed live: a "mazda mx 5"
+// wishlist term missed a product literally named "...Mazda MX-5...").
+// Collapsing hyphens/dashes to spaces and dropping repeated whitespace
+// before comparing makes those equivalent without needing fuzzy matching.
+function normalizeForMatch(s: string): string {
+  return s.toLowerCase().replace(/[-–—]/g, " ").replace(/\s+/g, " ").trim();
+}
+
 async function upsertProducts(
   addressId: string,
   platform: PlatformName,
@@ -123,8 +133,8 @@ async function upsertProducts(
     if (!isHotWheelsBranded(p)) continue; // discard fuzzy-search noise entirely
     seenProductIds.add(p.productId);
 
-    const lowerName = p.name.toLowerCase();
-    const matchedWishlistName = wishlistNames.find((w) => lowerName.includes(w.toLowerCase()));
+    const normalizedName = normalizeForMatch(p.name);
+    const matchedWishlistName = wishlistNames.find((w) => normalizedName.includes(normalizeForMatch(w)));
     const sourceQuery = matchedWishlistName ?? GENERIC_QUERY;
 
     const existing = await prisma.trackedProduct.findUnique({
@@ -388,14 +398,21 @@ export async function addWishlistItem(userId: string, name: string) {
   // already seen. Only touches rows still tagged with the generic query, on
   // addresses belonging to this user, so it never overwrites a product
   // that's already tied to a different wishlist term or another user's data.
-  await prisma.trackedProduct.updateMany({
-    where: {
-      sourceQuery: GENERIC_QUERY,
-      name: { contains: trimmed, mode: "insensitive" },
-      address: { userId },
-    },
-    data: { sourceQuery: trimmed },
+  // Filtered in JS (not a DB-level `contains`) so it can use the same
+  // hyphen/whitespace-normalized comparison as the live poll match —
+  // Postgres ILIKE alone would miss "Mazda MX-5" for a "mazda mx 5" term.
+  const candidates = await prisma.trackedProduct.findMany({
+    where: { sourceQuery: GENERIC_QUERY, address: { userId } },
+    select: { id: true, name: true },
   });
+  const normalizedTerm = normalizeForMatch(trimmed);
+  const matchingIds = candidates.filter((c) => normalizeForMatch(c.name).includes(normalizedTerm)).map((c) => c.id);
+  if (matchingIds.length > 0) {
+    await prisma.trackedProduct.updateMany({
+      where: { id: { in: matchingIds } },
+      data: { sourceQuery: trimmed },
+    });
+  }
 
   return item;
 }
